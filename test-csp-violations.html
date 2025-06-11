@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Tools MCP - Enhanced Error Logging Test</title>
+    <!-- CSP that will cause violations -->
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self'; style-src 'self'; img-src 'self';">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 10px 0;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        button {
+            padding: 10px 15px;
+            margin: 5px;
+            background-color: #007cba;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #005a87;
+        }
+        .error-log {
+            background-color: #ffebee;
+            border: 1px solid #f44336;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 3px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Browser Tools MCP - Enhanced Error Logging Test</h1>
+    <p>This page is designed to trigger various types of errors that should now be captured by the enhanced browser-tools-mcp.</p>
+
+    <div class="test-section">
+        <h2>1. CSP Violations</h2>
+        <p>These will trigger Content Security Policy violations:</p>
+        <button onclick="testInlineScript()">Test Inline Script CSP Violation</button>
+        <button onclick="testExternalImage()">Test External Image CSP Violation</button>
+        <button onclick="testInlineStyle()">Test Inline Style CSP Violation</button>
+    </div>
+
+    <div class="test-section">
+        <h2>2. Network Errors</h2>
+        <p>These will trigger network loading failures:</p>
+        <button onclick="testNetworkError()">Test 404 Network Error</button>
+        <button onclick="testCORSError()">Test CORS Error</button>
+    </div>
+
+    <div class="test-section">
+        <h2>3. JavaScript Errors</h2>
+        <p>These will trigger various JavaScript errors:</p>
+        <button onclick="testReferenceError()">Test Reference Error</button>
+        <button onclick="testTypeError()">Test Type Error</button>
+        <button onclick="testSyntaxError()">Test Syntax Error</button>
+    </div>
+
+    <div class="test-section">
+        <h2>4. Console Messages</h2>
+        <p>These will generate various console messages:</p>
+        <button onclick="testConsoleError()">Test Console Error</button>
+        <button onclick="testConsoleWarning()">Test Console Warning</button>
+        <button onclick="testConsoleLog()">Test Console Log</button>
+    </div>
+
+    <div class="test-section">
+        <h2>Error Log</h2>
+        <div id="errorLog" class="error-log">Errors will appear here...</div>
+    </div>
+
+    <!-- This inline script will cause a CSP violation -->
+    <script>
+        console.log("This inline script should cause a CSP violation!");
+        
+        // Add error logging to the page
+        window.addEventListener('error', function(e) {
+            logError('JavaScript Error: ' + e.message + ' at ' + e.filename + ':' + e.lineno);
+        });
+
+        window.addEventListener('unhandledrejection', function(e) {
+            logError('Unhandled Promise Rejection: ' + e.reason);
+        });
+
+        function logError(message) {
+            const errorLog = document.getElementById('errorLog');
+            const timestamp = new Date().toLocaleTimeString();
+            errorLog.textContent += timestamp + ': ' + message + '\n';
+        }
+
+        // Test functions
+        function testInlineScript() {
+            try {
+                // This will create another CSP violation
+                const script = document.createElement('script');
+                script.innerHTML = 'console.log("Dynamic inline script - CSP violation");';
+                document.head.appendChild(script);
+            } catch (e) {
+                logError('Inline script test error: ' + e.message);
+            }
+        }
+
+        function testExternalImage() {
+            try {
+                // This will try to load an external image, causing CSP violation
+                const img = document.createElement('img');
+                img.src = 'https://httpbin.org/image/png';
+                img.onerror = () => logError('External image failed to load (CSP violation)');
+                document.body.appendChild(img);
+            } catch (e) {
+                logError('External image test error: ' + e.message);
+            }
+        }
+
+        function testInlineStyle() {
+            try {
+                // This will try to add inline style, causing CSP violation
+                const div = document.createElement('div');
+                div.style.cssText = 'color: red; background: yellow;';
+                div.textContent = 'This div has inline styles that may violate CSP';
+                document.body.appendChild(div);
+            } catch (e) {
+                logError('Inline style test error: ' + e.message);
+            }
+        }
+
+        function testNetworkError() {
+            fetch('/nonexistent-endpoint')
+                .then(response => {
+                    if (!response.ok) {
+                        logError('Network error: ' + response.status + ' ' + response.statusText);
+                    }
+                })
+                .catch(error => {
+                    logError('Fetch error: ' + error.message);
+                });
+        }
+
+        function testCORSError() {
+            fetch('https://httpbin.org/get', { mode: 'cors' })
+                .then(response => {
+                    logError('CORS request succeeded (unexpected)');
+                })
+                .catch(error => {
+                    logError('CORS error: ' + error.message);
+                });
+        }
+
+        function testReferenceError() {
+            try {
+                // This will throw a ReferenceError
+                nonExistentVariable.someMethod();
+            } catch (e) {
+                logError('Reference error: ' + e.message);
+                throw e; // Re-throw to trigger the global error handler
+            }
+        }
+
+        function testTypeError() {
+            try {
+                // This will throw a TypeError
+                null.someMethod();
+            } catch (e) {
+                logError('Type error: ' + e.message);
+                throw e; // Re-throw to trigger the global error handler
+            }
+        }
+
+        function testSyntaxError() {
+            try {
+                // This will create a syntax error
+                eval('var x = {;');
+            } catch (e) {
+                logError('Syntax error: ' + e.message);
+                throw e; // Re-throw to trigger the global error handler
+            }
+        }
+
+        function testConsoleError() {
+            console.error('This is a test console error message', { errorData: 'test data' });
+        }
+
+        function testConsoleWarning() {
+            console.warn('This is a test console warning message', { warningData: 'test data' });
+        }
+
+        function testConsoleLog() {
+            console.log('This is a test console log message', { logData: 'test data' });
+        }
+
+        // Automatically log page load
+        window.addEventListener('load', function() {
+            logError('Page loaded successfully');
+            console.log('Test page loaded - ready to test enhanced error logging');
+        });
+    </script>
+</body>
+</html> 

@@ -145,6 +145,7 @@ const consoleErrors: any[] = [];
 const networkErrors: any[] = [];
 const networkSuccess: any[] = [];
 const allXhr: any[] = [];
+const cspViolations: any[] = [];
 
 // Store the current URL from the extension
 let currentUrl: string = "";
@@ -409,6 +410,18 @@ app.post("/extension-log", (req, res) => {
         timestamp: data.timestamp,
       });
       consoleErrors.push(data);
+      
+      // Also store CSP violations in separate array
+      if (data.isCSPViolation || data.source === "csp-violation") {
+        cspViolations.push(data);
+        if (cspViolations.length > currentSettings.logLimit) {
+          console.log(
+            `CSP violations exceeded limit (${currentSettings.logLimit}), removing oldest entry`
+          );
+          cspViolations.shift();
+        }
+      }
+      
       if (consoleErrors.length > currentSettings.logLimit) {
         console.log(
           `Console errors exceeded limit (${currentSettings.logLimit}), removing oldest entry`
@@ -461,6 +474,7 @@ app.post("/extension-log", (req, res) => {
     consoleErrors: consoleErrors.length,
     networkErrors: networkErrors.length,
     networkSuccess: networkSuccess.length,
+    cspViolations: cspViolations.length,
   });
   console.log("=== End Extension Log ===\n");
 
@@ -475,6 +489,11 @@ app.get("/console-logs", (req, res) => {
 
 app.get("/console-errors", (req, res) => {
   const truncatedLogs = truncateLogsToQueryLimit(consoleErrors);
+  res.json(truncatedLogs);
+});
+
+app.get("/csp-violations", (req, res) => {
+  const truncatedLogs = truncateLogsToQueryLimit(cspViolations);
   res.json(truncatedLogs);
 });
 
@@ -530,6 +549,7 @@ function clearAllLogs() {
   networkErrors.length = 0;
   networkSuccess.length = 0;
   allXhr.length = 0;
+  cspViolations.length = 0;
   selectedElement = null;
   console.log("All logs have been wiped");
 }

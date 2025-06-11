@@ -213,6 +213,27 @@ server.tool(
   }
 );
 
+server.tool(
+  "getCSPViolations", 
+  "Check Content Security Policy violations",
+  async () => {
+    return await withServerConnection(async () => {
+      const response = await fetch(
+        `http://${discoveredHost}:${discoveredPort}/csp-violations`
+      );
+      const json = await response.json();
+      return {
+        content: [
+          {
+            type: "text", 
+            text: JSON.stringify(json, null, 2),
+          },
+        ],
+      };
+    });
+  }
+);
+
 server.tool("getNetworkErrors", "Check our network ERROR logs", async () => {
   return await withServerConnection(async () => {
     const response = await fetch(
@@ -1169,7 +1190,7 @@ server.tool("runNextJSAudit", {}, async () => ({
               sizes: "60x60",
               type: "image/png"
             }
-            // add apple-icon-72x72.png, apple-icon-76x76.png, apple-icon-114x114.png, apple-icon-120x120.png, apple-icon-144x144.png, apple-icon-152x152.png, apple-icon-180x180.png
+            // add apple-touch-icon-72x72.png, apple-touch-icon-76x76.png, apple-touch-icon-114x114.png, apple-touch-icon-120x120.png, apple-touch-icon-144x144.png, apple-touch-icon-152x152.png, apple-touch-icon-180x180.png
           ]
         }
       };
@@ -1416,6 +1437,59 @@ server.tool(
             {
               type: "text",
               text: `Failed to run Best Practices audit: ${errorMessage}`,
+            },
+          ],
+        };
+      }
+    });
+  }
+);
+
+server.tool(
+  "getAllErrors",
+  "Get a comprehensive summary of all browser errors including console errors, CSP violations, and network errors",
+  async () => {
+    return await withServerConnection(async () => {
+      try {
+        // Fetch all error types in parallel
+        const [consoleErrorsResponse, cspViolationsResponse, networkErrorsResponse] = await Promise.all([
+          fetch(`http://${discoveredHost}:${discoveredPort}/console-errors`),
+          fetch(`http://${discoveredHost}:${discoveredPort}/csp-violations`),
+          fetch(`http://${discoveredHost}:${discoveredPort}/network-errors`)
+        ]);
+
+        const consoleErrors = await consoleErrorsResponse.json();
+        const cspViolations = await cspViolationsResponse.json();
+        const networkErrors = await networkErrorsResponse.json();
+
+        const summary = {
+          timestamp: new Date().toISOString(),
+          errorCounts: {
+            consoleErrors: consoleErrors.length,
+            cspViolations: cspViolations.length,
+            networkErrors: networkErrors.length,
+            total: consoleErrors.length + cspViolations.length + networkErrors.length
+          },
+          consoleErrors: consoleErrors,
+          cspViolations: cspViolations,
+          networkErrors: networkErrors
+        };
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(summary, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Failed to get comprehensive error summary: ${errorMessage}`,
             },
           ],
         };

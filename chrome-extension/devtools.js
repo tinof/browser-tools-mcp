@@ -535,6 +535,7 @@ function performAttach() {
     // Add the event listener when attaching
     chrome.debugger.onEvent.addListener(consoleMessageListener);
 
+    // Enable Runtime API for console logs and exceptions
     chrome.debugger.sendCommand(
       { tabId: currentTabId },
       "Runtime.enable",
@@ -545,6 +546,76 @@ function performAttach() {
           return;
         }
         console.log("Runtime API successfully enabled");
+      }
+    );
+
+    // Enable Network API for network loading failures
+    chrome.debugger.sendCommand(
+      { tabId: currentTabId },
+      "Network.enable",
+      {},
+      () => {
+        if (chrome.runtime.lastError) {
+          console.error("Failed to enable network:", chrome.runtime.lastError);
+        } else {
+          console.log("Network API successfully enabled");
+        }
+      }
+    );
+
+    // Enable Security API for CSP violations and security errors
+    chrome.debugger.sendCommand(
+      { tabId: currentTabId },
+      "Security.enable",
+      {},
+      () => {
+        if (chrome.runtime.lastError) {
+          console.error("Failed to enable security:", chrome.runtime.lastError);
+        } else {
+          console.log("Security API successfully enabled");
+        }
+      }
+    );
+
+    // Enable Log API for comprehensive log capture including CSP violations
+    chrome.debugger.sendCommand(
+      { tabId: currentTabId },
+      "Log.enable",
+      {},
+      () => {
+        if (chrome.runtime.lastError) {
+          console.error("Failed to enable log:", chrome.runtime.lastError);
+        } else {
+          console.log("Log API successfully enabled");
+        }
+      }
+    );
+
+    // Enable Page API for JavaScript dialogs and page-related errors
+    chrome.debugger.sendCommand(
+      { tabId: currentTabId },
+      "Page.enable",
+      {},
+      () => {
+        if (chrome.runtime.lastError) {
+          console.error("Failed to enable page:", chrome.runtime.lastError);
+        } else {
+          console.log("Page API successfully enabled");
+        }
+      }
+    );
+
+    // Enable Audits API for inspector issues
+    chrome.debugger.sendCommand(
+      { tabId: currentTabId },
+      "Audits.enable",
+      {},
+      () => {
+        if (chrome.runtime.lastError) {
+          console.error("Failed to enable audits:", chrome.runtime.lastError);
+        } else {
+          console.log("Audits API successfully enabled");
+        }
       }
     );
   });
@@ -587,6 +658,7 @@ const consoleMessageListener = (source, method, params) => {
     return;
   }
 
+  // Enhanced console message handling to capture comprehensive error logs
   if (method === "Runtime.exceptionThrown") {
     const entry = {
       type: "console-error",
@@ -595,11 +667,14 @@ const consoleMessageListener = (source, method, params) => {
         JSON.stringify(params.exceptionDetails),
       level: "error",
       timestamp: Date.now(),
+      source: "runtime-exception",
+      details: params.exceptionDetails
     };
     console.log("Sending runtime exception:", entry);
     sendToBrowserConnector(entry);
   }
 
+  // Console API calls (console.log, console.error, etc.)
   if (method === "Runtime.consoleAPICalled") {
     // Process all arguments from the console call
     let formattedMessage = "";
@@ -639,9 +714,135 @@ const consoleMessageListener = (source, method, params) => {
       level: params.type,
       message: formattedMessage,
       timestamp: Date.now(),
+      source: "console-api",
+      stackTrace: params.stackTrace
     };
     console.log("Sending console entry:", entry);
     sendToBrowserConnector(entry);
+  }
+
+  // Security violations (CSP, CORS, etc.)
+  if (method === "Security.securityStateChanged") {
+    const entry = {
+      type: "console-error",
+      level: "error",
+      message: `Security state changed: ${params.securityState}`,
+      timestamp: Date.now(),
+      source: "security",
+      details: params
+    };
+    console.log("Sending security state change:", entry);
+    sendToBrowserConnector(entry);
+  }
+
+  // Network loading failures
+  if (method === "Network.loadingFailed") {
+    const entry = {
+      type: "console-error",
+      level: "error", 
+      message: `Network loading failed: ${params.errorText || 'Unknown error'} - ${params.type || 'Unknown type'}`,
+      timestamp: Date.now(),
+      source: "network-loading-failed",
+      url: params.documentURL,
+      details: params
+    };
+    console.log("Sending network loading failed:", entry);
+    sendToBrowserConnector(entry);
+  }
+
+  // Content Security Policy violations
+  if (method === "Security.certificateError") {
+    const entry = {
+      type: "console-error",
+      level: "error",
+      message: `Certificate error: ${params.errorType}`,
+      timestamp: Date.now(),
+      source: "certificate-error", 
+      details: params
+    };
+    console.log("Sending certificate error:", entry);
+    sendToBrowserConnector(entry);
+  }
+
+  // Log violations (including CSP)
+  if (method === "Log.entryAdded") {
+    const logEntry = params.entry;
+    const isError = logEntry.level === "error" || logEntry.level === "warning";
+    
+    // Check if this is a CSP violation specifically
+    const isCSPViolation = logEntry.text && (
+      logEntry.text.includes("Content Security Policy") ||
+      logEntry.text.includes("CSP") ||
+      logEntry.text.includes("Refused to execute") ||
+      logEntry.text.includes("Refused to load") ||
+      logEntry.text.includes("unsafe-inline") ||
+      logEntry.text.includes("unsafe-eval")
+    );
+    
+    const entry = {
+      type: isError ? "console-error" : "console-log",
+      level: logEntry.level,
+      message: logEntry.text || logEntry.message || "Unknown log entry",
+      timestamp: logEntry.timestamp || Date.now(),
+      source: isCSPViolation ? "csp-violation" : `log-${logEntry.source || 'unknown'}`,
+      url: logEntry.url,
+      lineNumber: logEntry.lineNumber,
+      details: logEntry,
+      isCSPViolation: isCSPViolation
+    };
+    console.log("Sending log entry:", entry);
+    sendToBrowserConnector(entry);
+  }
+
+  // Page errors (JavaScript errors, resource loading errors, etc.)
+  if (method === "Page.javascriptDialogOpening") {
+    const entry = {
+      type: "console-error",
+      level: "warning",
+      message: `JavaScript dialog: ${params.type} - ${params.message}`,
+      timestamp: Date.now(),
+      source: "javascript-dialog",
+      details: params
+    };
+    console.log("Sending JavaScript dialog:", entry);
+    sendToBrowserConnector(entry);
+  }
+
+  // Generic inspector issues
+  if (method === "Audits.issueAdded") {
+    const issue = params.issue;
+    const entry = {
+      type: "console-error",
+      level: "warning",
+      message: `Audit issue: ${issue.code} - ${issue.message || JSON.stringify(issue.details)}`,
+      timestamp: Date.now(),
+      source: "audit-issue",
+      details: issue
+    };
+    console.log("Sending audit issue:", entry);
+    sendToBrowserConnector(entry);
+  }
+
+  // Performance timeline events that might indicate issues
+  if (method === "Performance.metrics") {
+    // Only log performance metrics that might indicate problems
+    const metrics = params.metrics || [];
+    const problematicMetrics = metrics.filter(metric => 
+      metric.name.includes('Error') || metric.name.includes('Failed') || metric.name.includes('Warning')
+    );
+    
+    if (problematicMetrics.length > 0) {
+      const entry = {
+        type: "console-error",
+        level: "warning", 
+        message: `Performance issues detected: ${problematicMetrics.map(m => `${m.name}: ${m.value}`).join(', ')}`,
+        timestamp: Date.now(),
+        source: "performance-metrics",
+        details: problematicMetrics
+      };
+      console.log("Sending performance issues:", entry);
+      sendToBrowserConnector(entry);
+    }
   }
 };
 

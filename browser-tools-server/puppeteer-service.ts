@@ -1,9 +1,10 @@
-import fs from "fs";
+import fs from "node:fs";
 import puppeteer from "puppeteer-core";
-import path from "path";
-import os from "os";
-import { execSync } from "child_process";
+import path from "node:path";
+import os from "node:os";
+import { execSync } from "node:child_process";
 import * as ChromeLauncher from "chrome-launcher";
+import { NetworkLogger } from "./network-logger.js";
 // ===== Configuration Types and Defaults =====
 
 /**
@@ -58,6 +59,9 @@ let BROWSER_CLEANUP_TIMEOUT = 60000; // 60 seconds default
 
 // Cache for browser executable paths
 let detectedBrowserPath: string | null = null;
+
+// Network logger instance
+const networkLogger = new NetworkLogger();
 
 // ===== Configuration Functions =====
 
@@ -136,7 +140,7 @@ async function launchNewBrowser(): Promise<puppeteer.Browser> {
     console.log(
       "Launching browser with options:",
       JSON.stringify({
-        headless: launchOptions.headless,
+        headless: (launchOptions as any).headless,
         executablePath: launchOptions.executablePath,
       })
     );
@@ -197,8 +201,8 @@ function createTempUserDataDir(): string {
  * @param userDataDir Path to the user data directory
  * @returns Launch options object
  */
-function configureLaunchOptions(userDataDir: string): any {
-  const launchOptions: any = {
+function configureLaunchOptions(userDataDir: string): puppeteer.LaunchOptions {
+  const launchOptions: puppeteer.LaunchOptions & { args: string[] } = {
     args: [
       "--remote-debugging-port=0", // Use dynamic port
       `--user-data-dir=${userDataDir}`,
@@ -219,7 +223,7 @@ function configureLaunchOptions(userDataDir: string): any {
   };
 
   // Add headless mode (using any to bypass type checking issues)
-  launchOptions.headless = "new";
+  (launchOptions as any).headless = "new";
 
   return launchOptions;
 }
@@ -228,7 +232,9 @@ function configureLaunchOptions(userDataDir: string): any {
  * Sets a custom browser executable path if configured
  * @param launchOptions Launch options object to modify
  */
-async function setCustomBrowserExecutable(launchOptions: any): Promise<void> {
+async function setCustomBrowserExecutable(
+  launchOptions: puppeteer.LaunchOptions,
+): Promise<void> {
   // First, try to use a custom browser path from configuration
   if (
     currentConfig.customBrowserPaths &&
@@ -317,7 +323,7 @@ async function findBrowserExecutablePath(): Promise<string> {
     let chromePath = "";
 
     // Chrome version data often contains the path
-    if (chrome.process && chrome.process.spawnfile) {
+    if (chrome.process?.spawnfile) {
       chromePath = chrome.process.spawnfile;
       console.log("Found Chrome path from process.spawnfile");
     } else {
@@ -356,15 +362,14 @@ async function findBrowserExecutablePath(): Promise<string> {
     if (chromePath) {
       console.log(`Chrome found via chrome-launcher: ${chromePath}`);
       return chromePath;
-    } else {
-      console.log("Chrome launched but couldn't determine executable path");
     }
+    console.log("Chrome launched but couldn't determine executable path");
   } catch (error) {
     // Check if it's a ChromeNotInstalledError
     const errorMessage = error instanceof Error ? error.message : String(error);
     if (
       errorMessage.includes("No Chrome installations found") ||
-      (error as any)?.code === "ERR_LAUNCHER_NOT_INSTALLED"
+      (error as { code?: string })?.code === "ERR_LAUNCHER_NOT_INSTALLED"
     ) {
       console.log("Chrome not installed. Falling back to manual detection");
     } else {
@@ -705,9 +710,12 @@ export async function connectToHeadlessBrowser(
 }> {
   console.log(
     `Connecting to headless browser for ${url}${
-      options.blockResources ? " (blocking non-essential resources)" : ""
+      options.blockResources ? " (blocking non-essential-resources)" : ""
     }`
   );
+
+  // Clear previous network logs
+  networkLogger.clearLogs();
 
   try {
     // Validate URL format
@@ -725,18 +733,58 @@ export async function connectToHeadlessBrowser(
     }
 
     // Extract port from WebSocket endpoint
-    const port = parseInt(
-      launchedBrowserWSEndpoint.split(":")[2].split("/")[0]
+    const port = Number.parseInt(
+      launchedBrowserWSEndpoint.split(":")[2].split("/")[0],
     );
 
     // Always create a new page for each audit to avoid request interception conflicts
     console.log("Creating a new page for this audit");
     const page = await browser.newPage();
 
+    // Start network logging
+    networkLogger.start(page);
+
     // Set a longer timeout for navigation
     const navigationTimeout = 10000; // 10 seconds
     page.setDefaultNavigationTimeout(navigationTimeout);
 
+    // Emulate network conditions if specified
+    if (options.emulateNetworkCondition) {
+      if (options.emulateNetworkCondition === 'offline') {
+        await page.setOfflineMode(true);
+      } else {
+        const slow3G: puppeteer.NetworkConditions = {
+          latency: 400,
+          download: (500 * 1024) / 8,
+          upload: (500 * 1024) / 8,
+        };
+        const fast3G: puppeteer.NetworkConditions = {
+          latency: 150,
+          download: (1.5 * 1024 * 1024) / 8,
+          upload: (750 * 1024) / 8,
+        };
+        const G4: puppeteer.NetworkConditions = {
+          latency: 50,
+          download: (4 * 1024 * 1024) / 8,
+          upload: (2 * 1024 * 1024) / 8,
+        };
+
+        const networkConditionsMap = {
+          slow3G,
+          fast3G,
+          "4G": G4,
+        };
+
+        const networkConditions = networkConditionsMap[options.emulateNetworkCondition as keyof typeof networkConditionsMap];
+        if (networkConditions) {
+          await page.emulateNetworkConditions(networkConditions);
+        }
+      }
+      console.log(
+        `Emulating ${options.emulateNetworkCondition} network conditions`
+      );
+    }
+    
     // Navigate to the URL
     console.log(`Navigating to ${url}`);
     await page.goto(url, {
@@ -826,57 +874,6 @@ export async function connectToHeadlessBrowser(
       console.log(`Set timezone to ${options.timezoneId}`);
     }
 
-    // Emulate network conditions if specified
-    if (options.emulateNetworkCondition) {
-      // Define network condition types that match puppeteer's expected format
-      interface PuppeteerNetworkConditions {
-        offline: boolean;
-        latency?: number;
-        download?: number;
-        upload?: number;
-      }
-
-      let networkConditions: PuppeteerNetworkConditions;
-
-      switch (options.emulateNetworkCondition) {
-        case "slow3G":
-          networkConditions = {
-            offline: false,
-            latency: 400,
-            download: (500 * 1024) / 8,
-            upload: (500 * 1024) / 8,
-          };
-          break;
-        case "fast3G":
-          networkConditions = {
-            offline: false,
-            latency: 150,
-            download: (1.5 * 1024 * 1024) / 8,
-            upload: (750 * 1024) / 8,
-          };
-          break;
-        case "4G":
-          networkConditions = {
-            offline: false,
-            latency: 50,
-            download: (4 * 1024 * 1024) / 8,
-            upload: (2 * 1024 * 1024) / 8,
-          };
-          break;
-        case "offline":
-          networkConditions = { offline: true };
-          break;
-        default:
-          networkConditions = { offline: false };
-      }
-
-      // @ts-ignore - Property might not be in types but is supported
-      await page.emulateNetworkConditions(networkConditions);
-      console.log(
-        `Emulating ${options.emulateNetworkCondition} network conditions`
-      );
-    }
-
     // Check if we should block resources based on the options
     if (options.blockResources) {
       const resourceTypesToBlock = options.customResourceBlockList ||
@@ -905,10 +902,12 @@ export async function connectToHeadlessBrowser(
         await page.waitForSelector(options.waitForSelector, {
           timeout: options.waitForTimeout || 30000,
         });
-      } catch (selectorError: any) {
-        console.warn(
-          `Failed to find selector "${options.waitForSelector}": ${selectorError.message}`
-        );
+      } catch (selectorError: unknown) {
+        if (selectorError instanceof Error) {
+          console.warn(
+            `Failed to find selector "${options.waitForSelector}": ${selectorError.message}`,
+          );
+        }
         // Continue anyway, don't fail the whole operation
       }
     }
@@ -922,4 +921,12 @@ export async function connectToHeadlessBrowser(
       }`
     );
   }
+}
+
+/**
+ * Get the captured network logs
+ * @returns Array of network logs
+ */
+export function getNetworkLogs() {
+  return networkLogger.getLogs();
 }
